@@ -1,124 +1,135 @@
+# provider.tf
 provider "aws" {
-  region = "us-west-2"
+  region = "us-east-1"
 }
 
-resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
-  enable_dns_support   = var.enable_dns_support
-  enable_dns_hostnames = var.enable_dns_hostnames
-  tags                 = var.tags
+# variables.tf
+variable "key_pair_name" {
+  description = "Name of the EC2 key pair"
+  default     = "social-feed-app"
 }
 
-resource "aws_subnet" "public" {
-  count                   = length(var.public_subnet_cidrs)
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  map_public_ip_on_launch = true
-  tags                    = var.tags
+# main.tf
+module "modules-bp" {
+  source  = "app.terraform.io/Gordons-Cloud/modules-bp/vpc"
+  version = "1.0.0"
+
+  key_pair_name = var.key_pair_name
 }
 
-resource "aws_subnet" "private" {
-  count      = length(var.private_subnet_cidrs)
-  vpc_id     = aws_vpc.main.id
-  cidr_block = var.private_subnet_cidrs[count.index]
-  tags       = var.tags
-}
-
-resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
-  tags   = var.tags
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.main.id
-  subnet_id     = aws_subnet.public[0].id
-  tags          = var.tags
-}
-
-resource "aws_eip" "main" {
-  vpc = true
-  tags = var.tags
-}
-
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-2.0.*-x86_64-gp2"]
   }
-  tags = var.tags
 }
 
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
-  tags = var.tags
-}
-
-resource "aws_route_table_association" "public" {
-  count          = length(var.public_subnet_cidrs)
-  subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_route_table_association" "private" {
-  count          = length(var.private_subnet_cidrs)
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
-}
-
-resource "aws_flow_log" "main" {
-  log_destination      = aws_cloudwatch_log_group.main.arn
-  traffic_type         = "ALL"
-  vpc_id               = aws_vpc.main.id
-  log_destination_type = "cloud-watch-logs"
-}
-
-resource "aws_cloudwatch_log_group" "main" {
-  name = "/aws/vpc/flow-logs"
-}
-
-resource "aws_security_group" "main" {
-  vpc_id = aws_vpc.main.id
-  tags   = var.tags
+resource "aws_security_group" "socialfeed_sg" {
+  name   = "socialfeed-sg"
+  vpc_id = module.modules-bp.vpc_id
 
   ingress {
-    from_port   = 0
-    to_port     = 65535
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
     from_port   = 0
-    to_port     = 65535
-    protocol    = "tcp"
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "socialfeed-sg"
+    environment = "dev"
+    owner       = "team-a"
   }
 }
 
-resource "aws_network_acl" "main" {
-  vpc_id = aws_vpc.main.id
-  tags   = var.tags
+resource "aws_instance" "socialfeed_ec2" {
+  ami           = data.aws_ami.amazon_linux_2.id
+  instance_type = "t2.micro"
+  key_name      = var.key_pair_name
 
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 65535
+  subnet_id                   = module.modules-bp.public_subnet_id
+  vpc_security_group_ids      = [aws_security_group.socialfeed_sg.id]
+  associate_public_ip_address = true
+
+  user_data = <<-EOF
+              #!/bin/bash
+              amazon-linux-extras install nginx1
+              systemctl start nginx
+              systemctl enable nginx
+              EOF
+
+  tags = {
+    Name        = "socialfeed-ec2"
+    environment = "dev"
+    owner       = "team-a"
+  }
+}
+
+resource "aws_eip" "socialfeed_eip" {
+  domain   = "vpc"
+  instance = aws_instance.socialfeed_ec2.id
+  depends_on = [module.modules-bp.internet_gateway]
+
+  tags = {
+    Name        = "socialfeed-eip"
+    environment = "dev"
+    owner       = "team-a"
+  }
+}
+
+# outputs.tf
+output "ec2_instance_public_ip" {
+  description = "Public IP address of the EC2 instance"
+  value       = aws_instance.socialfeed_ec2.public_ip
+}
+
+output "ec2_instance_public_dns" {
+  description = "Public DNS name of the EC2 instance"
+  value       = aws_instance.socialfeed_ec2.public_dns
+}
+
+output "eip_public_ip" {
+  description = "Public IP address of the Elastic IP"
+  value       = aws_eip.socialfeed_eip.public_ip
+}
+
+terraform {
+  backend "remote" {
+    organization = "your-organization"
+    workspaces {
+      name = "socialfeed-app-dev"
+    }
   }
 
-  egress {
-    protocol   = "tcp"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 65535
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 3.0"
+    }
+  }
+
+  sentinel_policies = {
+    "compliance" = <<-EOT
+${file("compliance-policy.sentinel")}
+EOT
+    "cost"       = <<-EOT
+${file("cost-policy.sentinel")}
+EOT
   }
 }
