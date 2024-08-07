@@ -95,3 +95,16 @@ resource "aws_network_acl" "main" {
     to_port    = 65535
   }
 }
+
+output "vpc_id" {
+  value = aws_vpc.main.id
+}
+
+output "private_subnet_ids" {
+  value = aws_subnet.private[*].id
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public[*].id
+}
+
