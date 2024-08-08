@@ -66,30 +66,74 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private.id
 }
 
-resource "aws_security_group" "main" {
+# Example Security Group with best practices
+resource "aws_security_group" "web_server" {
+  name = "web_server_sg"
   vpc_id = aws_vpc.main.id
   tags   = var.tags
 
+  # Allow HTTP traffic from within the VPC
   ingress {
-    from_port   = 0
-    to_port     = 65535
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 
+  # Allow HTTPS traffic from within the VPC
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  # Allow all outbound traffic (consider restricting this)
   egress {
     from_port   = 0
-    to_port     = 65535
-    protocol    = "tcp"
+    to_port     = 0
+    protocol    = "-1" # All protocols
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
+# Example Network ACL with best practices
 resource "aws_network_acl" "main" {
   vpc_id = aws_vpc.main.id
   tags   = var.tags
 
+  # Allow HTTP traffic from within the VPC
   ingress {
+    protocol  = "tcp"
+    rule_no   = 100
+    action    = "allow"
+    cidr_block = var.vpc_cidr
+    from_port = 80
+    to_port   = 80
+  }
+
+  # Allow HTTPS traffic from within the VPC
+  ingress {
+    protocol  = "tcp"
+    rule_no   = 101
+    action    = "allow"
+    cidr_block = var.vpc_cidr
+    from_port = 443
+    to_port   = 443
+  }
+
+  # Allow ephemeral ports for return traffic (TCP)
+  ingress {
+    protocol  = "tcp"
+    rule_no   = 102
+    action    = "allow"
+    cidr_block = var.vpc_cidr
+    from_port = 1024
+    to_port   = 65535
+  }
+
+  # Allow all outbound traffic (consider restricting this)
+  egress {
     protocol  = "tcp"
     rule_no   = 100
     action    = "allow"
@@ -98,10 +142,21 @@ resource "aws_network_acl" "main" {
     to_port   = 65535
   }
 
+  # Deny all other inbound traffic
+  ingress {
+    protocol  = "-1" # All protocols
+    rule_no   = 200
+    action    = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port = 0
+    to_port   = 65535
+  }
+
+  # Deny all other outbound traffic (consider restricting this)
   egress {
-    protocol  = "tcp"
-    rule_no   = 100
-    action    = "allow"
+    protocol  = "-1" # All protocols
+    rule_no   = 200
+    action    = "deny"
     cidr_block = "0.0.0.0/0"
     from_port = 0
     to_port   = 65535
